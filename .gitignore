@@ -1,9 +1,12 @@
-# HAM10000: imagenes y metadatos originales (ver data/README.md)
+# HAM10000: original images and metadata (see data/README.md)
 data/raw/
 
-# Resultados de entrenamiento (se copian desde la maquina remota)
+# Training results (copied from remote machine)
 runs/
 
 # Python
 __pycache__/
 .ipynb_checkpoints/
+
+# Structure template
+template.txt
