@@ -10,3 +10,6 @@ __pycache__/
 
 # Structure template
 template.txt
+
+# First version of splits
+splits-v1/
