@@ -8,7 +8,7 @@ Each entry is dated and references the run(s) that support it.
 ## D-001 — Train EfficientNet-B4 at HAM10000 native resolution (600 x 450)
 
 - **Date:** 2026-11-11
-- **Status:** Tested in run B1 — result **not satisfactory**; under review (see D-002)
+- **Status:** Tested in run B1 — result **not satisfactory**; superseded for the B4 baseline by D-002 (run B2)
 - **Related commits:** `afa50d4` (Use of native resolution), `65a8432` (Data balance with native resolution), `6a608b5` (New training binary)
 - **Related run:** `runs/binary/B1_binary_B4_600x450_20261111_112623` (see `protocol.md`, run B1)
 
@@ -84,10 +84,71 @@ contribute:
 
 ---
 
-## D-002 — Pending: choose input resolution for the binary MEL model
+## D-002 — Train EfficientNet-B4 at its design resolution (380 x 380)
 
 - **Date:** 2026-11-11
-- **Status:** Open
-- **Question:** Should the binary model be trained at B4's design resolution
-  (380 px) or at native resolution with a larger backbone (B5–B7)?
-- **Decide after:** the controlled comparison described in D-001.
+- **Status:** Provisionally adopted as the B4 baseline; native resolution with
+  a larger backbone (B5–B7) still to be evaluated
+- **Related run:** `runs/binary/B2_binary_B4_380x380_20261111_144536` (see `protocol.md`, run B2)
+
+### Context
+
+Run B1 (D-001) trained B4 at the native 600 x 450, about 1.87x the pixels of
+B4's 380 x 380 design resolution, and showed probable overfitting. B2 is the
+controlled comparison proposed in D-001.
+
+### Decision
+
+Train B4 at **380 x 380 (input tensor 380 x 380 x 3)**. Every other setting is
+identical to B1: same script (`scripts/train_binary_mel_native.py`), same data
+(`data/splits-v2`), seed, hyperparameters, augmentation, and callbacks. The
+only change is `--img-size 380 380`.
+
+Condition to note: the 600 x 450 (4:3) images are resized on the fly to a
+square 380 x 380 with area interpolation. This **does not preserve the aspect
+ratio**, so lesions are slightly squashed horizontally (all 8,505 images were
+resized).
+
+### Outcome (B2 vs B1)
+
+| Metric (validation) | B1 — 600 x 450 | B2 — 380 x 380 | Change |
+|---|---|---|---|
+| ROC AUC | 0.7985 | **0.8175** | +0.019 |
+| Average Precision | 0.3251 | **0.3434** | +0.018 |
+| Best val_loss (phase 1 / phase 2) | 0.3130 / 0.4111 | **0.3071 / 0.3788** | lower |
+| Train AUC − val AUC (last epoch) | 0.927 − 0.805 = **0.12** | 0.896 − 0.830 = **0.07** | gap ~halved |
+| Sensitivity / specificity at chosen threshold | 0.611 / 0.803 (thr 0.50) | 0.599 / 0.813 (thr 0.46) | similar |
+| Sensitivity / specificity at thr 0.25 | 0.846 / 0.594 | 0.889 / 0.575 | better sensitivity |
+| Total training time | 59:06 | **25:52** | ~2.3x faster |
+
+- The script's automatic "possible overfitting" warning fired in B1 but
+  **not in B2**.
+- Validation curves were more stable (val_accuracy 0.77–0.88 after epoch 2,
+  vs 0.71–0.87 in B1).
+- As in B1, fine-tuning did not improve phase 1's best val_loss
+  (0.3788 vs 0.3071), although validation AUC kept rising in phase 2
+  (0.808 -> 0.830).
+
+### Interpretation
+
+B2 supports the hypothesis from D-001. Training B4 above its design resolution
+contributed to the overfitting, and returning to 380 px reduced the generalization
+gap while slightly improving ranking quality, at less than half the compute.
+
+Caveats:
+
+- The AUC improvement (+0.019) comes from a single seed and only 162
+  validation melanomas. It is probably within run-to-run variance, so it is
+  not yet a significant difference.
+- The non-overfitting part of the problem remains: the imbalanced training split,
+  threshold and early stopping selected on the reported validation set, and
+  fine-tuning that does not lower val_loss.
+- Square resizing distorts the aspect ratio. A 4:3 input near B4's pixel budget
+  (e.g. 440 x 330 or 384 x 288) has not been tested.
+
+### Next steps
+
+- Repeat B1 and B2 with 2–3 seeds to check that the gap and AUC difference hold.
+- Test B5–B7 at a resolution closer to native (B3 in `protocol.md`).
+- Move to `data/splits-v2-balanced`, use a separate split for threshold
+  selection, and report on the held-out test split.
