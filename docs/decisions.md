@@ -149,6 +149,121 @@ Caveats:
 ### Next steps
 
 - Repeat B1 and B2 with 2–3 seeds to check that the gap and AUC difference hold.
-- Test B5–B7 at a resolution closer to native (B3 in `protocol.md`).
+- Test B5–B7 at a resolution closer to native (planned in `protocol.md`;
+  run ID not yet assigned, since B3 was used for the splits-v3 run, D-003).
 - Move to `data/splits-v2-balanced`, use a separate split for threshold
   selection, and report on the held-out test split.
+
+---
+
+## D-003 — Extend the training data with BCN20000 (splits-v3)
+
+- **Date:** 2026-11-13
+- **Status:** Dataset built and verified; run B3 **in progress** (results
+  pending, see `protocol.md`, run B3)
+- **Related files:** `scripts/balance_dataset_extended.py` (builds the split),
+  `scripts/plot_dataset_growth.py` (figures below), `data/splits-v3/`
+  (git-ignored)
+- **Related run:** `runs/binary/B3_binary_B4_380x380_v3_20261113_115220`
+
+### Context
+
+B1 and B2 point to limited data as a core problem: only 770 training
+melanomas, weak separation, and a persistent train/validation gap. BCN20000
+(Hospital Clínic de Barcelona, ISIC Archive collection 249, 18,946 dermoscopic
+images of 5,440 lesions, 1024 x 1024 px) is the largest public dermoscopic
+dataset with lesion-level IDs and uses diagnosis categories that map onto the
+HAM10000 classes.
+
+### Decision
+
+Build `data/splits-v3` = HAM10000 + BCN20000, and train B4 at 380 x 380 on it
+with every other setting identical to B2.
+
+1. **HAM10000 keeps its official split** (`data/splits-v1`, the same one used
+   by splits-v2). HAM validation and test images are unchanged, so B3 can
+   still be compared with B2 on exactly the same 1,503 HAM validation images.
+2. **BCN20000 is split by `lesion_id`** with the same technique as the original
+   HAM split: `GroupShuffleSplit`, 70 / 15 / 15, seed 42 (first split) and 43
+   (second split). All images of a lesion stay in one subset.
+3. The merged split is checked for leakage: no `lesion_id` or `image_id` is
+   shared between training, validation and test. HAM and BCN share no image or
+   lesion IDs (`HAM_*` vs `IL_*`).
+4. Images are **copied byte for byte** (no resizing, no re-encoding):
+   HAM10000 stays 600 x 450 and BCN20000 stays 1024 x 1024. The training
+   script resizes both to 380 x 380 on the fly. BCN images are square, so,
+   unlike HAM, they are not distorted by the square resize.
+5. No offline augmentation (as in splits-v2); imbalance is still handled with
+   sqrt class weights.
+
+### Class mapping (BCN20000 `diagnosis_3` -> HAM10000 `dx`)
+
+| BCN20000 diagnosis | Images | HAM10000 class |
+|---|---:|---|
+| Nevus | 5,647 | `nv` |
+| Melanoma, NOS | 4,003 | `mel` |
+| Melanoma metastasis | 633 | `mel` (see caveat) |
+| Basal cell carcinoma | 3,676 | `bcc` |
+| Seborrheic keratosis | 1,268 | `bkl` |
+| Solar lentigo | 283 | `bkl` |
+| Solar or actinic keratosis | 1,088 | `akiec` |
+| Squamous cell carcinoma, NOS | 559 | `akiec` |
+| Dermatofibroma | 168 | `df` |
+| Vascular (only `diagnosis_2` given) | 151 | `vasc` |
+| Scar | 314 | **excluded** (no HAM10000 equivalent) |
+| No diagnosis (original BCN test set) | 1,156 | **excluded** |
+
+17,476 BCN images (4,981 lesions) are kept; 1,470 are excluded and listed in
+`data/splits-v3/excluded_metadata.csv`. The original BCN diagnosis is kept in
+the `source_dx` column of each split's metadata, so any mapping can be
+reverted without rebuilding the split.
+
+Mapping rationale and caveats:
+
+- **Melanoma metastasis -> `mel`.** It is melanoma tissue, and a melanoma
+  detector that calls it "non-melanoma" would produce a clinically serious
+  false negative. Metastases look different from primary melanomas (often
+  nodular, amelanotic), so they may be harder to learn and may shift what the
+  model treats as "melanoma". `--metastasis exclude` drops them instead.
+- **SCC -> `akiec`.** HAM10000's `akiec` already includes intraepithelial
+  carcinoma (SCC in situ / Bowen's disease). This only matters for future
+  multi-class work; in the binary task both are non-melanoma.
+- **Scar** is benign but has no HAM10000 class, so it is excluded to keep the
+  seven-class structure.
+
+### Resulting dataset
+
+![Images per class, splits-v2 vs splits-v3](figures/splits_v3_class_growth.png)
+
+![Training images per class, splits-v2 vs splits-v3](figures/splits_v3_class_growth_training.png)
+
+| Subset | splits-v2 images | splits-v3 images | splits-v2 MEL | splits-v3 MEL | MEL % (v2 -> v3) |
+|---|---:|---:|---:|---:|---|
+| Training | 7,002 | 19,398 | 770 | 4,141 | 11.0 % -> 21.3 % |
+| Validation | 1,503 | 4,036 | 162 | 795 | 10.8 % -> 19.7 % |
+| Test | 1,510 | 4,057 | 181 | 813 | 12.0 % -> 20.0 % |
+| **Total** | **10,015** | **27,491** | **1,113** | **5,749** | 11.1 % -> 20.9 % |
+
+Training melanomas grow **5.4x** (770 -> 4,141). Every class grows. The
+smallest relative gain is `nv` (+84 %); the largest are `bcc` (+715 %),
+`akiec` (+504 %) and `mel` (+417 %).
+
+### Consequences to keep in mind
+
+- **Validation metrics are not directly comparable with B1/B2.** The splits-v3
+  validation set is 2.7x larger, comes from two hospitals and has about
+  twice the melanoma prevalence. AP and precision depend on prevalence (the
+  chance level of AP rises from ~0.11 to ~0.20). For a fair comparison, B3
+  is also evaluated on the HAM-only part of its validation set, which is
+  identical to B2's validation set.
+- **Domain shift.** BCN images differ in resolution (1024 x 1024 vs 600 x 450),
+  acquisition and patient population, and BCN contains harder cases
+  (metastases, amelanotic and acral lesions). Ranking metrics on the mixed set
+  can therefore drop even if the model improves on HAM.
+- **Cost.** About 2.8x more training images; epochs take ~257 s vs ~100 s
+  in B2.
+
+### Outcome (run B3)
+
+*Pending — the run is still in progress. This section will be completed with
+the B3 vs B2 comparison (overall, HAM-only and BCN-only validation).*

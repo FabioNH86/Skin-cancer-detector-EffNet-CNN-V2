@@ -127,7 +127,8 @@ threshold the model raises ~545 false alarms out of 1,341 negatives.
 
 - **B2 (control):** identical to B1 but at B4's design resolution (380 x 380).
   This isolates the effect of input size. **Done — see Run B2 below.**
-- **B3:** native 600 x 450 with a backbone designed for larger inputs (B5–B7).
+- Native 600 x 450 with a backbone designed for larger inputs (B5–B7)
+  (run ID not yet assigned; B3 was used for the splits-v3 run).
 - Train on `data/splits-v2-balanced`, use a separate split for threshold
   selection, and report on the held-out test split.
 
@@ -246,6 +247,107 @@ Selected points from the threshold sweep:
 ### Follow-up runs planned
 
 - Seed repeats of B1 and B2 (2–3 seeds each).
-- **B3:** native or near-native resolution with B5–B7.
+- Native or near-native resolution with B5–B7 (run ID not yet assigned).
 - Optional 4:3 variant of B4 (e.g. 440 x 330) to remove aspect distortion.
 - Balanced split + separate threshold-selection split + test-set report.
+- **More data:** add BCN20000 to the training data. **In progress — see Run B3
+  below.**
+
+---
+
+## Run B3 — Binary MEL vs non-MEL, EfficientNet-B4, 380 x 380, HAM10000 + BCN20000 (splits-v3)
+
+- **Run ID:** `B3_binary_B4_380x380_v3`
+- **Output folder:** `runs/binary/B3_binary_B4_380x380_v3_20261113_115220/`
+- **Date:** started 2026-11-13, 11:52:20
+- **Command:** `python3 scripts/train_binary_mel_native.py --img-size 380 380 --dataset-dir data/splits-v3 --name B3_binary_B4_380x380_v3`
+  (launched in tmux session `cancer_detector`, window `B3`, conda env `IST_ML`)
+- **Status:** **In progress** (phase 1, head training)
+- **Related decision:** D-003 in `decisions.md`
+
+> **Key condition:** the **only change from B2 is the training data**. The
+> run uses `data/splits-v3` (HAM10000 + BCN20000) instead of `data/splits-v2`
+> (HAM10000 only). Script, input size (380 x 380), model, hyperparameters,
+> augmentation, class-weight mode, seed and callbacks are identical to B2.
+
+### Data preparation
+
+1. BCN20000 (ISIC Archive collection 249) was downloaded with `isic-cli`
+   12.8.0 into `data/raw/bcn20000/images/`: 18,946 / 18,946 images,
+   all 1024 x 1024, plus `metadata.csv` (18 columns, 5,440 unique lesions).
+2. `data/splits-v3` was built with:
+
+   ```bash
+   python3 scripts/balance_dataset_extended.py
+   ```
+
+   HAM10000 keeps its official split (`data/splits-v1`). BCN20000 is split by
+   `lesion_id` (`GroupShuffleSplit`, 70/15/15, seed 42), and its diagnoses are
+   mapped to the HAM10000 classes (see D-003). Scars (314) and unlabelled
+   images (1,156) are excluded. The merged split has no lesion or image in
+   more than one subset. Output: 3.7 GB, preparation log in
+   `data/splits-v3/preparation.log`.
+3. A quick pipeline test (`--quick`, 30 images per class) confirmed that the
+   mixed 600 x 450 / 1024 x 1024 images load and resize correctly.
+
+![Images per class, splits-v2 vs splits-v3](figures/splits_v3_class_growth.png)
+
+![Training images per class, splits-v2 vs splits-v3](figures/splits_v3_class_growth_training.png)
+
+Images per class and source (figures regenerated with
+`python3 scripts/plot_dataset_growth.py [--subset training]`):
+
+| Split | Source | akiec | bcc | bkl | df | mel | nv | vasc | Total |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Training | HAM10000 | 207 | 381 | 741 | 89 | 770 | 4,718 | 96 | 7,002 |
+| Training | BCN20000 | 1,237 | 2,524 | 1,089 | 105 | 3,371 | 3,977 | 93 | 12,396 |
+| Validation | HAM10000 | 67 | 74 | 172 | 18 | 162 | 988 | 22 | 1,503 |
+| Validation | BCN20000 | 174 | 611 | 241 | 38 | 633 | 799 | 37 | 2,533 |
+| Test | HAM10000 | 53 | 59 | 186 | 8 | 181 | 999 | 24 | 1,510 |
+| Test | BCN20000 | 236 | 541 | 221 | 25 | 632 | 871 | 21 | 2,547 |
+| **Total** | | **1,974** | **4,190** | **2,650** | **283** | **5,749** | **12,352** | **293** | **27,491** |
+
+| Split | Images | Lesions | MEL | non-MEL | MEL % |
+|---|---:|---:|---:|---:|---|
+| Training | 19,398 | 8,715 | 4,141 | 15,257 | 21.3 % |
+| Validation | 4,036 | 1,867 | 795 | 3,241 | 19.7 % |
+| Test | 4,057 | 1,869 | 813 | 3,244 | 20.0 % (not used) |
+
+### Conditions
+
+| Item | Value |
+|---|---|
+| Environment | kikai-one, NVIDIA GeForce RTX 4060 (8 GB), same software versions as B1/B2 |
+| Data | `data/splits-v3`: train 19,398 (4,141 MEL), val 4,036 (795 MEL); test not used |
+| Input | 380 x 380 x 3 (all 23,434 images resized on the fly; HAM 4:3 squashed, BCN square) |
+| Model | EfficientNet-B4 (ImageNet) + GlobalMaxPool + Dense(256) + BN + Dropout(0.5) + Dense(1, sigmoid) |
+| Augmentation | RandomFlip (h+v), RandomRotation(0.2), RandomZoom(0.1) |
+| Class weights | sqrt: non-mel 0.797, mel 1.53 (B2: 0.75 / 2.132, because MEL prevalence doubled) |
+| Training | float32, batch 16, seed 42; EarlyStopping(patience 5), ReduceLROnPlateau(factor 0.3, patience 2) |
+| Threshold mode | `f1` on validation |
+
+### Progress so far (phase 1, head)
+
+Epoch time is ~257 s (B2: ~94–105 s), consistent with 2.8x more training
+images.
+
+| Epoch | val_loss | val_auc | Note |
+|---|---|---|---|
+| 1 | 0.4723 | 0.7475 | |
+| 3 | 0.4565 | 0.7764 | |
+| 5 | 0.4425 | 0.7818 | |
+| 7 | — | — | ReduceLROnPlateau: lr 5e-4 -> 1.5e-4 |
+| 8 | 0.4348 | 0.7990 | |
+| 9 | 0.4238 | 0.7962 | |
+| 10 | 0.4782 | 0.8014 | |
+| 11 | **0.4205** | 0.7988 | best so far |
+
+These validation values are on the mixed HAM + BCN validation set and are
+**not comparable** with B2's numbers (see D-003, "Consequences").
+
+### Results
+
+*Pending — the run is still in progress. To be completed with: final metrics
+on the full splits-v3 validation set, the same metrics restricted to the HAM
+part (identical to B2's validation set) and to the BCN part, B2's model
+evaluated on the same splits, and the training schedule table.*
