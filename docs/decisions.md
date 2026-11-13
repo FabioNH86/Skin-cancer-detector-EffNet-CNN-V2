@@ -159,8 +159,8 @@ Caveats:
 ## D-003 — Extend the training data with BCN20000 (splits-v3)
 
 - **Date:** 2026-11-13
-- **Status:** Dataset built and verified; run B3 **in progress** (results
-  pending, see `protocol.md`, run B3)
+- **Status:** Tested in run B3 — **adopted** as the default training data
+  (see `protocol.md`, run B3); treatment of melanoma metastases still open
 - **Related files:** `scripts/balance_dataset_extended.py` (builds the split),
   `scripts/plot_dataset_growth.py` (figures below), `data/splits-v3/`
   (git-ignored)
@@ -265,5 +265,56 @@ smallest relative gain is `nv` (+84 %); the largest are `bcc` (+715 %),
 
 ### Outcome (run B3)
 
-*Pending — the run is still in progress. This section will be completed with
-the B3 vs B2 comparison (overall, HAM-only and BCN-only validation).*
+B3 is B2 with splits-v3 instead of splits-v2. To compare fairly, both models
+were evaluated on the same images: the HAM part of splits-v3 validation, which
+is identical to B2's validation set, and the BCN part.
+
+| Validation subset | Metric | B2 (HAM only) | B3 (HAM + BCN) | Change |
+|---|---|---|---|---|
+| HAM (1,503 images, 162 MEL) | ROC AUC | 0.8175 | **0.8349** | +0.018 (95 % CI −0.009 to +0.044) |
+| HAM | Average Precision | 0.3434 | **0.4359** | **+0.091 (95 % CI +0.018 to +0.162)** |
+| HAM | Specificity at ≥ 0.85 sensitivity | 0.617 (514 FP) | **0.661 (455 FP)** | −59 false alarms |
+| BCN (2,533 images, 633 MEL) | ROC AUC | 0.6276 | **0.7932** | +0.166 |
+| BCN | Average Precision | 0.3716 | **0.6314** | +0.260 |
+| All (4,036 images, 795 MEL) | ROC AUC | 0.6874 | **0.8143** | +0.127 |
+
+Confidence intervals come from a paired lesion-level bootstrap (2,000
+resamples). Full tables are in `protocol.md`, run B3.
+
+- **Fine-tuning improved val_loss for the first time** (0.4205 -> 0.4072).
+  In B1 and B2 it never did.
+- **Train/validation gap** at the restored best epoch: 0.885 vs 0.814 (~0.07,
+  similar to B2). It grows to 0.10 by the last epoch, so the automatic
+  overfitting warning fired. EarlyStopping restored the best epoch.
+- **Cost:** 1:49:33, vs 25:52 for B2 (~4.2x).
+
+### Interpretation
+
+- **Adding BCN20000 helps, mainly through robustness.** A HAM-only model
+  (B2) drops to AUC 0.63 on images from another hospital and finds only 37 %
+  of BCN melanomas at its threshold. B3 keeps AUC 0.79 there. Any deployment
+  outside the HAM sources would need this.
+- **It also helps on HAM itself.** The AP gain on the same 1,503 images is
+  significant. The AUC gain (+0.018) is in the same direction but within noise
+  (single seed, 162 positives). The improvement is in precision at
+  moderate-to-high sensitivity (~60 fewer false alarms at 0.80–0.85
+  sensitivity); at ≥ 0.90 sensitivity the two models are equivalent.
+- **The 0.85 sensitivity target is still out of reach at a useful
+  specificity** (0.585 on the full validation set). More data alone does not
+  solve the separation problem.
+- **Melanoma metastases are the weak spot.** B3 detects only 31 % of them
+  (median P(mel) 0.21) vs 68 % of other BCN melanomas. Whether to keep them
+  as `mel` remains an open question (see next steps).
+- **Thresholds are not transferable between B2 and B3.** Training prevalence
+  doubled and the class weights changed, so B3's probabilities are lower
+  (median P(mel) on HAM non-melanomas 0.07 vs 0.19). Compare models at
+  matched sensitivity, and re-select the threshold for every model.
+
+### Next steps
+
+- Run B3 with `--metastasis exclude` (same seed) to measure the effect of
+  metastases on primary-melanoma detection.
+- Repeat B2 and B3 with 2–3 seeds to confirm the HAM AP gain.
+- Give phase 1 more epochs: it used all 15 without early stopping.
+- Use a separate threshold-selection split, and report on the splits-v3 test
+  set per source (HAM and BCN).

@@ -250,8 +250,7 @@ Selected points from the threshold sweep:
 - Native or near-native resolution with B5–B7 (run ID not yet assigned).
 - Optional 4:3 variant of B4 (e.g. 440 x 330) to remove aspect distortion.
 - Balanced split + separate threshold-selection split + test-set report.
-- **More data:** add BCN20000 to the training data. **In progress — see Run B3
-  below.**
+- **More data:** add BCN20000 to the training data. **Done — see Run B3 below.**
 
 ---
 
@@ -259,10 +258,10 @@ Selected points from the threshold sweep:
 
 - **Run ID:** `B3_binary_B4_380x380_v3`
 - **Output folder:** `runs/binary/B3_binary_B4_380x380_v3_20261113_115220/`
-- **Date:** started 2026-11-13, 11:52:20
+- **Date:** 2026-11-13, 11:52:20 – 13:41:54 (duration 01:49:33)
 - **Command:** `python3 scripts/train_binary_mel_native.py --img-size 380 380 --dataset-dir data/splits-v3 --name B3_binary_B4_380x380_v3`
   (launched in tmux session `cancer_detector`, window `B3`, conda env `IST_ML`)
-- **Status:** **In progress** (phase 1, head training)
+- **Status:** Completed
 - **Related decision:** D-003 in `decisions.md`
 
 > **Key condition:** the **only change from B2 is the training data**. The
@@ -324,30 +323,162 @@ Images per class and source (figures regenerated with
 | Augmentation | RandomFlip (h+v), RandomRotation(0.2), RandomZoom(0.1) |
 | Class weights | sqrt: non-mel 0.797, mel 1.53 (B2: 0.75 / 2.132, because MEL prevalence doubled) |
 | Training | float32, batch 16, seed 42; EarlyStopping(patience 5), ReduceLROnPlateau(factor 0.3, patience 2) |
-| Threshold mode | `f1` on validation |
+| Threshold mode | `f1` on validation -> **0.39** |
 
-### Progress so far (phase 1, head)
+### Training schedule
 
-Epoch time is ~257 s (B2: ~94–105 s), consistent with 2.8x more training
-images.
+| Phase | Trainable | Initial LR | Max epochs | Epochs run | Best epoch | Best val_loss | Time |
+|---|---|---|---|---|---|---|---|
+| 1 – head | Head only (backbone frozen) | 5e-4 | 15 | 15 (no early stop) | 11 | 0.4205 | 64.5 min |
+| 2 – fine-tuning | Last 30 backbone layers (BatchNorm frozen) | 1e-5 | 15 | 9 | 4 | **0.4072** | 43.5 min |
 
-| Epoch | val_loss | val_auc | Note |
+- Epoch time ~257 s in phase 1 and ~289 s in phase 2 (B2: ~94–105 s),
+  consistent with 2.8x more training images.
+- ReduceLROnPlateau fired after phase-1 epochs 7, 13 and 15, and after
+  phase-2 epochs 6 and 8. Phase 1 used all 15 epochs and val_loss was still
+  slowly improving, so the head was not fully converged.
+- **First run in which fine-tuning improved val_loss** (0.4072 vs phase 1's
+  0.4205); in B1 and B2 it never did.
+
+### Results (validation, final model = phase 2, epoch 4)
+
+Full splits-v3 validation set (HAM + BCN, 4,036 images, 795 MEL):
+
+| Metric | Value |
+|---|---|
+| ROC AUC | **0.8143** |
+| Average Precision | 0.5910 (chance level = prevalence 0.197) |
+| Threshold | 0.39 |
+| Sensitivity (MEL recall) | 0.6088 (484 / 795) |
+| Specificity | 0.8454 |
+| Precision (MEL) | 0.4914 |
+| F1 (MEL) | 0.5438 |
+| Balanced accuracy | 0.7271 |
+| Accuracy | 0.7988 |
+
+Confusion matrix (threshold 0.39):
+
+| | Pred non-MEL | Pred MEL |
+|---|---|---|
+| **Actual non-MEL** | 2,740 (TN) | 501 (FP) |
+| **Actual MEL** | 311 (FN) | 484 (TP) |
+
+Selected points from the threshold sweep (full validation set):
+
+| Threshold | Sensitivity | Specificity | Precision | FN | FP |
+|---|---|---|---|---|---|
+| 0.10 | 0.901 | 0.460 | 0.291 | 79 | 1,749 |
+| 0.15 | 0.850 | 0.585 | 0.335 | 119 | 1,345 |
+| 0.20 | 0.787 | 0.664 | 0.365 | 169 | 1,089 |
+| 0.30 | 0.699 | 0.778 | 0.436 | 239 | 720 |
+| 0.50 | 0.511 | 0.900 | 0.555 | 389 | 325 |
+
+### Results by data source, and comparison with B2
+
+The validation predictions were split by source (`source` column of
+`data/splits-v3/validation_metadata.csv`). B2's saved model was also run on the
+full splits-v3 validation set (380 x 380, same on-the-fly resize). The HAM part
+of splits-v3 validation is **identical to B2's validation set**: B2's AUC on it
+reproduces its original 0.8175, which confirms that the evaluation is
+consistent. The script is saved as `eval_by_source.py` in the B3 run folder,
+with its output in `eval_by_source.csv`.
+
+| Validation subset | n (MEL) | Model | ROC AUC | AP | Sens / spec at own thr | Sens / spec at 0.30 |
+|---|---|---|---|---|---|---|
+| HAM only (= B2 val) | 1,503 (162) | B2 | 0.8175 | 0.3434 | 0.599 / 0.813 (0.46) | 0.815 / 0.647 |
+| HAM only (= B2 val) | 1,503 (162) | **B3** | **0.8349** | **0.4359** | 0.543 / 0.883 (0.39) | 0.679 / 0.826 |
+| BCN only | 2,533 (633) | B2 | 0.6276 | 0.3716 | 0.333 / 0.814 (0.46) | 0.659 / 0.554 |
+| BCN only | 2,533 (633) | **B3** | **0.7932** | **0.6314** | 0.626 / 0.819 (0.39) | 0.705 / 0.744 |
+| All | 4,036 (795) | B2 | 0.6874 | 0.3448 | 0.387 / 0.813 (0.46) | 0.691 / 0.592 |
+| All | 4,036 (795) | **B3** | **0.8143** | **0.5910** | 0.609 / 0.845 (0.39) | 0.699 / 0.778 |
+
+Specificity at matched sensitivity on the HAM-only validation set (each
+model's threshold chosen so that sensitivity reaches the target; 1,341
+negatives):
+
+| Target sensitivity | B2 specificity (FP) | B3 specificity (FP) |
+|---|---|---|
+| ≥ 0.80 | 0.661 (455) | **0.705 (396)** |
+| ≥ 0.85 | 0.617 (514) | **0.661 (455)** |
+| ≥ 0.90 | **0.575 (570)** | 0.562 (587) |
+
+Paired lesion-level bootstrap on the HAM-only validation set (2,000
+resamples), B3 − B2:
+
+| Metric | Mean difference | 95 % CI | P(difference ≤ 0) |
 |---|---|---|---|
-| 1 | 0.4723 | 0.7475 | |
-| 3 | 0.4565 | 0.7764 | |
-| 5 | 0.4425 | 0.7818 | |
-| 7 | — | — | ReduceLROnPlateau: lr 5e-4 -> 1.5e-4 |
-| 8 | 0.4348 | 0.7990 | |
-| 9 | 0.4238 | 0.7962 | |
-| 10 | 0.4782 | 0.8014 | |
-| 11 | **0.4205** | 0.7988 | best so far |
+| ROC AUC | +0.018 | [−0.009, +0.044] | 0.083 |
+| Average Precision | **+0.091** | **[+0.018, +0.162]** | 0.008 |
 
-These validation values are on the mixed HAM + BCN validation set and are
-**not comparable** with B2's numbers (see D-003, "Consequences").
+Melanoma subtypes in the BCN validation set:
 
-### Results
+| BCN diagnosis | n | B2 sens at 0.46 | B3 sens at 0.39 | B3 sens at 0.30 | B3 median P(mel) |
+|---|---|---|---|---|---|
+| Melanoma, NOS | 543 | 0.368 | **0.678** | 0.751 | 0.608 |
+| Melanoma metastasis | 90 | 0.122 | **0.311** | 0.422 | 0.210 |
 
-*Pending — the run is still in progress. To be completed with: final metrics
-on the full splits-v3 validation set, the same metrics restricted to the HAM
-part (identical to B2's validation set) and to the BCN part, B2's model
-evaluated on the same splits, and the training schedule table.*
+### Comparison with B2 (summary)
+
+| Item | B2 — splits-v2 | B3 — splits-v3 |
+|---|---|---|
+| Training images (MEL) | 7,002 (770) | 19,398 (4,141) |
+| Val AUC on HAM val (same 1,503 images) | 0.8175 | **0.8349** |
+| Val AP on HAM val | 0.3434 | **0.4359** |
+| Val AUC on BCN val | 0.6276 | **0.7932** |
+| Best val_loss phase 1 / phase 2 | 0.3071 / 0.3788 | 0.4205 / **0.4072** (not comparable: different val set) |
+| Train AUC − val AUC, best epoch | not recorded | 0.885 − 0.814 = **0.07** |
+| Train AUC − val AUC, last epoch | 0.896 − 0.830 = 0.07 | 0.924 − 0.823 = 0.10 |
+| Duration | 25:52 | 1:49:33 |
+
+### Observations
+
+1. **Better on HAM, with the same images B2 was evaluated on.** AP rises from
+   0.343 to 0.436 (+0.091, 95 % CI excluding zero). AUC rises by +0.018, but
+   that difference is not significant (95 % CI [−0.009, +0.044]). At 0.80–0.85
+   sensitivity, B3 raises ~60 fewer false alarms than B2 out of 1,341
+   negatives. At ≥ 0.90 sensitivity the two models are equivalent.
+2. **B2 does not generalize to BCN20000.** Trained on HAM only, B2 reaches AUC
+   0.628 on BCN validation and detects only 37 % of BCN melanomas at its own
+   threshold. B3 reaches 0.793 on BCN. A HAM-only model would fail on images
+   from another hospital, so adding BCN mainly buys **robustness to a second
+   domain**.
+3. **BCN is harder than HAM even for B3** (AUC 0.793 vs 0.835). It contains
+   more difficult lesion types and has a higher melanoma prevalence.
+4. **Melanoma metastases are poorly detected** (sensitivity 0.31 at threshold
+   0.39, median P(mel) 0.21). They make up 90 of 633 BCN validation melanomas
+   and lower BCN sensitivity. Their visual appearance is different from
+   primary melanoma (see D-003).
+5. **Probabilities are calibrated differently.** B3 was trained with double the
+   melanoma prevalence and smaller class weights, so its outputs are lower on
+   HAM (median P(mel) on HAM non-melanomas 0.07 vs 0.19 for B2). A fixed
+   threshold such as 0.25 or 0.30 therefore means a different operating point
+   for each model. Compare the models at matched sensitivity, not at equal
+   thresholds.
+6. **Fine-tuning helped for the first time** (best val_loss 0.4072 vs 0.4205
+   in phase 1, val AUC 0.799 -> 0.814). With 2.8x more data, unfreezing the
+   last 30 layers improves generalization instead of only fitting the
+   training set.
+7. **Overfitting is not solved.** The automatic warning fired (train AUC 0.924
+   vs val 0.823 at the last epoch). The restored best epoch has a smaller gap
+   (0.885 vs 0.814). After phase-2 epoch 4, train AUC keeps rising while
+   val_loss rises, and EarlyStopping restores epoch 4.
+8. **Sensitivity is still far from the 0.85 target** at a useful
+   specificity. On the full validation set, 0.85 sensitivity needs threshold
+   ≈ 0.15, with 1,345 false alarms out of 3,241 negatives (specificity 0.585).
+
+### Limitations
+
+- As in B1 and B2, threshold and early stopping use the reported validation set,
+  there is no test-set evaluation, and only one seed was run.
+- The per-source analysis and B2 cross-evaluation are post-hoc, on the same
+  validation set used for model selection.
+- HAM images are still squashed from 4:3 to a square; BCN images are not.
+
+### Follow-up runs planned
+
+- Decide on melanoma metastases: keep them as `mel` (and consider
+  oversampling) or drop them (`--metastasis exclude`) and compare.
+- Seed repeats of B2 and B3 to confirm the HAM AP gain.
+- Larger phase-1 budget (phase 1 ran all 15 epochs without stopping).
+- Separate threshold-selection split, and the held-out splits-v3 test set
+  reported per source.
